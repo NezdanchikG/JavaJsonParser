@@ -6,15 +6,23 @@ import java.util.List;
 import java.util.Map;
 
 public class JsonParser {
-    private final List<JsonToken> tokens;
+    private List<JsonToken> tokens;
     private int position = 0;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    // конструктор, принимающий токены
     public JsonParser(List<JsonToken> tokens) {
         this.tokens = tokens;
     }
 
+    //  конструктор, принимающий строку JSON
+    public JsonParser(String jsonString) throws Exception {
+        JsonTokenizer tokenizer = new JsonTokenizer(jsonString);
+        this.tokens = tokenizer.tokenize();  // Токенизация входной строки
+    }
+
+    // парсинг, работающий с токенами
     public Object parse() throws Exception {
         if (tokens.isEmpty()) {
             throw new IllegalStateException("No tokens available for parsing.");
@@ -22,14 +30,29 @@ public class JsonParser {
         try {
             position = 0;
             JsonToken current = peek();
-            if (current.type() == JsonToken.Type.BracketObjectLeft) {
-                return parseObject();
-            } else {
-                throw new IllegalArgumentException("JSON must start with an object. Arrays are not supported at the top level.");
+            switch (current.type()) {
+                case BracketObjectLeft:
+                    return parseObject();
+                case BracketArrayLeft:
+                    return parseArray();
+                case String:
+                case Number:
+                case True:
+                case False:
+                case Null:
+                    return parseValue();  // Обрабатываем примитивы на верхнем уровне
+                default:
+                    throw new IllegalArgumentException("Invalid JSON format. Unexpected token: " + current.type());
             }
         } finally {
             position = 0;
         }
+    }
+
+    public Object parse(String jsonString) throws Exception {
+        JsonTokenizer tokenizer = new JsonTokenizer(jsonString);
+        this.tokens = tokenizer.tokenize();
+        return parse();
     }
 
     public <T> T parse(Class<T> clazz) throws Exception {
@@ -43,31 +66,33 @@ public class JsonParser {
     }
 
     private Object parseObject() throws Exception {
-        consume(JsonToken.Type.BracketObjectLeft);
+        expect(JsonToken.Type.BracketObjectLeft);
         Map<String, Object> obj = new HashMap<>();
         while (peek().type() != JsonToken.Type.BracketObjectRight) {
-            JsonToken keyToken = consume(JsonToken.Type.String);
-            consume(JsonToken.Type.Colon);
+            JsonToken keyToken = expect(JsonToken.Type.String);
+            expect(JsonToken.Type.Colon);
             Object value = parseValue();
             obj.put(keyToken.value(), value);
             if (peek().type() == JsonToken.Type.Comma) {
-                consume(JsonToken.Type.Comma);
+                expect(JsonToken.Type.Comma);
             }
         }
-        consume(JsonToken.Type.BracketObjectRight);
+        expect(JsonToken.Type.BracketObjectRight);
         return obj;
     }
 
     Object parseArray() throws Exception {
-        consume(JsonToken.Type.BracketArrayLeft);
+        expect(JsonToken.Type.BracketArrayLeft);
         List<Object> array = new ArrayList<>();
         while (peek().type() != JsonToken.Type.BracketArrayRight) {
             array.add(parseValue());
             if (peek().type() == JsonToken.Type.Comma) {
-                consume(JsonToken.Type.Comma);
+                expect(JsonToken.Type.Comma);
+            } else if (peek().type() != JsonToken.Type.BracketArrayRight) {
+                throw new IllegalArgumentException("Expected ',' or ']', but found: " + peek().value());
             }
         }
-        consume(JsonToken.Type.BracketArrayRight);
+        expect(JsonToken.Type.BracketArrayRight);
         return array;
     }
 
@@ -75,17 +100,17 @@ public class JsonParser {
         JsonToken token = peek();
         switch (token.type()) {
             case Number:
-                consume(JsonToken.Type.Number);
+                expect(JsonToken.Type.Number);
                 return parseNumber(token);
             case String:
-                consume(JsonToken.Type.String);
+                expect(JsonToken.Type.String);
                 return token.value();
             case True:
             case False:
-                consume(token.type());
+                expect(token.type());
                 return Boolean.parseBoolean(token.value());
             case Null:
-                consume(JsonToken.Type.Null);
+                expect(JsonToken.Type.Null);
                 return null;
             case BracketObjectLeft:
                 return parseObject();
@@ -104,7 +129,7 @@ public class JsonParser {
         return Integer.parseInt(content);
     }
 
-    private JsonToken consume(JsonToken.Type expectedType) throws Exception {
+    private JsonToken expect(JsonToken.Type expectedType) throws Exception {
         if (position >= tokens.size()) {
             throw new IllegalArgumentException("Unexpected end of input, expected " + expectedType);
         }
@@ -115,9 +140,9 @@ public class JsonParser {
         return token;
     }
 
-    private JsonToken peek() {
+    private JsonToken peek() throws Exception {
         if (position >= tokens.size()) {
-            throw new IndexOutOfBoundsException("Attempt to access beyond end of token list");
+            throw new IllegalArgumentException("Unexpected end of input");
         }
         return tokens.get(position);
     }
